@@ -4,7 +4,7 @@
 [![AWS Provider](https://img.shields.io/badge/AWS%20Provider-~%3E6.0-FF9900.svg?logo=amazon-aws&logoColor=white)](https://registry.terraform.io/providers/hashicorp/aws/latest)
 [![GCP Provider](https://img.shields.io/badge/GCP%20Provider-~%3E8.0-4285F4.svg?logo=google-cloud&logoColor=white)](https://registry.terraform.io/providers/hashicorp/google/latest)
 [![SLA](https://img.shields.io/badge/Availability-99.99%25%20HA%20SLA-00C853.svg)](#high-availability--sla-architecture)
-[![Routing](https://img.shields.io/badge/Routing-Dynamic%20BGP%20(4--Tunnel)-009688.svg)](#network-topology--bgp-addressing-matrix)
+[![Routing](https://img.shields.io/badge/Routing-Dynamic%20BGP%20%284--Tunnel%29-009688.svg)](#network-topology--bgp-addressing-matrix)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 An enterprise-grade, automated Terraform configuration establishing an end-to-end multi-cloud ingress architecture:
@@ -18,6 +18,7 @@ An enterprise-grade, automated Terraform configuration establishing an end-to-en
 ## Table of Contents
 
 - [Architectural Overview](#architectural-overview)
+- [Visual Proof of Deployment](#visual-proof-of-deployment)
 - [Traffic Flow & Packet Lifecycle](#traffic-flow--packet-lifecycle)
 - [Network Topology & BGP Addressing Matrix](#network-topology--bgp-addressing-matrix)
 - [High Availability & SLA Architecture](#high-availability--sla-architecture)
@@ -109,10 +110,91 @@ flowchart TD
 
 ---
 
+## Visual Proof of Deployment
+
+The following screenshots from live production Google Cloud Platform and Amazon Web Services consoles validate the deployed infrastructure:
+
+### 1. Successful Terraform Provisioning
+Provisioning completed with 32 resources added across AWS and GCP, outputting the ALB DNS name (`prod-public-alb-1809782473.us-east-1.elb.amazonaws.com`), Target Group ARN, AWS VPN Connection IDs, and GCP private instance IPs (`10.20.1.10`, `10.20.2.10`, `10.20.3.10`):
+
+![Terraform Apply Complete](screenshots/Screenshot%20from%202026-11-04%2015-20-23.png)
+
+---
+
+### 2. AWS Ingress & Routing Infrastructure
+
+#### AWS Internet-Facing Application Load Balancer
+Active ALB `prod-public-alb` distributed across 3 Availability Zones (`us-east-1a`, `us-east-1b`, `us-east-1c`) with an HTTP:80 listener forwarding 100% of incoming traffic to the IP Target Group `prod-ext-api-tg`:
+
+![AWS Application Load Balancer](screenshots/Screenshot%20from%202026-11-04%2015-21-16.png)
+
+#### AWS Virtual Private Gateway (VGW)
+`prod-aws-vgw-gcp` (`vgw-074a889506430bcde`) in `Available` state, attached to `prod-aws-vpc` with Amazon ASN `64512`:
+
+![AWS Virtual Private Gateway](screenshots/Screenshot%20from%202026-11-04%2015-22-22.png)
+
+#### AWS Customer Gateways
+Dual Customer Gateways mapping directly to GCP Cloud HA VPN interfaces (`34.184.42.159` and `34.183.19.113`) with Google BGP ASN `64514`:
+
+![AWS Customer Gateways](screenshots/Screenshot%20from%202026-11-04%2015-22-12.png)
+
+#### AWS Site-to-Site VPN Connections
+Both redundant VPN connections (`vpn-076964b52a7f7aa69` and `vpn-020bf256f36f882dc`) in `Available` state attached to the Virtual Private Gateway:
+
+![AWS Site-to-Site VPN Connections](screenshots/Screenshot%20from%202026-11-04%2015-22-30.png)
+
+---
+
+### 3. Google Cloud Platform (GCP) HA VPN & BGP Network Fabric
+
+#### Cloud HA VPN Tunnels (All 4 BGP Sessions Established)
+All four IPsec IKEv2 tunnels actively established with concurrent dynamic BGP sessions:
+- `prod-ha-vpn-tunnel-0-1`: Interface 0 $\leftrightarrow$ `54.90.161.249` (BGP `169.254.10.2` / `169.254.10.1`) — **Established / BGP established**
+- `prod-ha-vpn-tunnel-0-2`: Interface 0 $\leftrightarrow$ `54.210.242.173` (BGP `169.254.10.6` / `169.254.10.5`) — **Established / BGP established**
+- `prod-ha-vpn-tunnel-1-1`: Interface 1 $\leftrightarrow$ `3.85.149.149` (BGP `169.254.11.2` / `169.254.11.1`) — **Established / BGP established**
+- `prod-ha-vpn-tunnel-1-2`: Interface 1 $\leftrightarrow$ `18.233.67.42` (BGP `169.254.11.6` / `169.254.11.5`) — **Established / BGP established**
+
+![GCP Cloud VPN Tunnels Established](screenshots/Screenshot%20from%202026-11-04%2015-22-49.png)
+
+#### Cloud Router BGP Status
+GCP Cloud Router `prod-cr-ha-vpn` (ASN `64514`) managing all 4 BGP peering sessions with healthy status checks:
+
+![GCP Cloud Router](screenshots/Screenshot%20from%202026-11-04%2015-22-57.png)
+
+#### Cloud HA VPN Gateway
+Dual interfaces terminating on distinct Google border network routing engines (`34.183.19.113` on Interface 0 and `34.184.42.159` on Interface 1):
+
+![GCP Cloud HA VPN Gateway](screenshots/Screenshot%20from%202026-11-04%2015-23-08.png)
+
+#### Peer VPN Gateway (4 Public IPs)
+GCP External Gateway configured with `FOUR_IPS_REDUNDANCY` mapping to AWS's 4 public VPN endpoints:
+
+![GCP Peer VPN Gateway](screenshots/Screenshot%20from%202026-11-04%2015-23-14.png)
+
+---
+
+### 4. GCP Private Backend Compute Instances
+
+#### Multi-Zone Private Compute Engine VMs
+Three Ubuntu 24.04 LTS instances running across `us-central1-a`, `us-central1-b`, and `us-central1-c` (`prod-gcp-api-1`, `prod-gcp-api-2`, `prod-gcp-api-3`) with internal IPs (`10.20.1.10`, `10.20.2.10`, `10.20.3.10`) and strictly **zero external public IPs**:
+
+![GCP Private Compute Engine Instances](screenshots/Screenshot%20from%202026-11-04%2015-24-46.png)
+
+---
+
+### 5. End-to-End Live Ingress Validation
+
+#### Public Traffic Routed via AWS ALB to GCP Private Backend
+Live web browser request hitting the public AWS ALB DNS endpoint (`http://prod-public-alb-1809782473.us-east-1.elb.amazonaws.com`), displaying the HTML response served by private GCP Compute instance `prod-gcp-api-1` (`10.20.1.10`) over the multi-cloud IPsec VPN:
+
+![Live End-to-End Traffic Validation](screenshots/Screenshot%20from%202026-11-04%2015-23-43.png)
+
+---
+
 ## Traffic Flow & Packet Lifecycle
 
 ### 1. Ingress Journey (Client to GCP Private Backend)
-1. **Public Client Request**: A user sends an HTTP request to the AWS Application Load Balancer DNS name (e.g., `prod-public-alb-123456789.us-east-1.elb.amazonaws.com`).
+1. **Public Client Request**: A user sends an HTTP request to the AWS Application Load Balancer DNS name (e.g., `prod-public-alb-1809782473.us-east-1.elb.amazonaws.com`).
 2. **ALB Termination & Connection Pooling**: The ALB terminates the TCP/HTTP connection on port 80. The listener executes a forward action pointing to the IP Target Group (`ext-api-tg`).
 3. **Hybrid Target Group Routing**: The target group routes the request to one of the registered external private IPs (`10.20.1.10`, `10.20.2.10`, `10.20.3.10`). Because the target type is `ip` and the address is outside the AWS VPC, AWS requires `availability_zone = "all"`.
 4. **VPC Route Lookup**: The ALB node initiates a new TCP connection from its private IP in the AWS public subnet (`10.0.1.0/24`, `10.0.2.0/24`, or `10.0.3.0/24`). The VPC route table matches the BGP-propagated prefix `10.20.0.0/16` pointing to the Virtual Private Gateway (`vgw-*`).
@@ -217,24 +299,36 @@ Google Cloud HA VPN coupled with AWS Virtual Private Gateway provides a **99.99%
 │       └── terraform-ci.yml                 # Automated Terraform fmt and validate CI
 ├── Makefile                                # Operational lifecycle targets (init, plan, apply, test)
 ├── README.md                               # Architecture and operations guide
-├── terraform/
-│   ├── main.tf                             # Cross-cloud orchestration (VGW, HA VPN, Compute, ALB)
-│   ├── variables.tf                        # Input variable definitions and defaults
-│   ├── outputs.tf                          # Infrastructure endpoints, IDs, and testing commands
-│   ├── provider.tf                         # Provider constraints (AWS ~> 6.0, GCP ~> 8.0)
-│   ├── terraform.tfvars                    # Active environment variables
-│   ├── terraform.tfvars.example            # Sample configuration template
-│   └── modules/
-│       ├── aws/
-│       │   ├── load-balancer/              # Application & Network Load Balancer module
-│       │   ├── security-groups/            # Reusable AWS security group module
-│       │   ├── vpc/                        # Modular AWS VPC with IGW & NAT Gateway
-│       │   ├── launch_template/            # Launch template module
-│       │   └── auto_scaling_group/         # ASG module
-│       └── gcp/
-│           ├── vpc/                        # GCP VPC, subnets, and firewall rules
-│           ├── lb/                         # GCP LB module
-│           └── network_endpoint_groups/    # GCP NEG module
+├── screenshots/                            # Live deployment validation screenshots
+│   ├── Screenshot from 2026-11-04 15-20-23.png
+│   ├── Screenshot from 2026-11-04 15-21-16.png
+│   ├── Screenshot from 2026-11-04 15-22-12.png
+│   ├── Screenshot from 2026-11-04 15-22-22.png
+│   ├── Screenshot from 2026-11-04 15-22-30.png
+│   ├── Screenshot from 2026-11-04 15-22-49.png
+│   ├── Screenshot from 2026-11-04 15-22-57.png
+│   ├── Screenshot from 2026-11-04 15-23-08.png
+│   ├── Screenshot from 2026-11-04 15-23-14.png
+│   ├── Screenshot from 2026-11-04 15-23-43.png
+│   └── Screenshot from 2026-11-04 15-24-46.png
+└── terraform/
+    ├── main.tf                             # Cross-cloud orchestration (VGW, HA VPN, Compute, ALB)
+    ├── variables.tf                        # Input variable definitions and defaults
+    ├── outputs.tf                          # Infrastructure endpoints, IDs, and testing commands
+    ├── provider.tf                         # Provider constraints (AWS ~> 6.0, GCP ~> 8.0)
+    ├── terraform.tfvars                    # Active environment variables
+    ├── terraform.tfvars.example            # Sample configuration template
+    └── modules/
+        ├── aws/
+        │   ├── load-balancer/              # Application & Network Load Balancer module
+        │   ├── security-groups/            # Reusable AWS security group module
+        │   ├── vpc/                        # Modular AWS VPC with IGW & NAT Gateway
+        │   ├── launch_template/            # Launch template module
+        │   └── auto_scaling_group/         # ASG module
+        └── gcp/
+            ├── vpc/                        # GCP VPC, subnets, and firewall rules
+            ├── lb/                         # GCP LB module
+            └── network_endpoint_groups/    # GCP NEG module
 ```
 
 ---
@@ -307,6 +401,10 @@ make apply
 # Or: terraform -chdir=terraform apply -var-file="terraform.tfvars"
 ```
 *Provisioning takes approximately 4–6 minutes while AWS creates the Virtual Private Gateway and ALB, and GCP provisions the Cloud HA VPN Gateway and Compute Engine instances.*
+
+Upon completion, Terraform outputs all connection details:
+
+![Terraform Provisioning Outputs](screenshots/Screenshot%20from%202026-11-04%2015-20-23.png)
 
 ---
 
@@ -387,6 +485,10 @@ done
 <p><b>Private IP:</b> 10.20.3.10</p>
 ```
 
+Live browser confirmation:
+
+![Live Browser Verification](screenshots/Screenshot%20from%202026-11-04%2015-23-43.png)
+
 ---
 
 ## Troubleshooting Runbook
@@ -452,4 +554,3 @@ make destroy
 
 > [!CAUTION]
 > Destroying this configuration will terminate the IPsec tunnels, tear down the AWS Application Load Balancer, and destroy the backend GCP compute instances. Ensure DNS traffic has been redirected prior to teardown.
-
