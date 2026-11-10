@@ -72,7 +72,19 @@ resource "aws_lb_listener" "lb_listener" {
     for_each = var.listeners[count.index].default_actions
     content {
       type             = default_action.value["type"]
-      target_group_arn = lookup(default_action.value, "target_group_arn", null) != null ? default_action.value["target_group_arn"] : aws_lb_target_group.lb_target_group[lookup(default_action.value, "target_group_index", 0)].arn
+      target_group_arn = lookup(default_action.value, "type", "") == "forward" ? (lookup(default_action.value, "target_group_arn", null) != null ? default_action.value["target_group_arn"] : (length(aws_lb_target_group.lb_target_group) > 0 ? aws_lb_target_group.lb_target_group[lookup(default_action.value, "target_group_index", 0)].arn : null)) : null
+
+      dynamic "redirect" {
+        for_each = lookup(default_action.value, "redirect", null) != null ? [default_action.value["redirect"]] : []
+        content {
+          port        = lookup(redirect.value, "port", "443")
+          protocol    = lookup(redirect.value, "protocol", "HTTPS")
+          status_code = lookup(redirect.value, "status_code", "HTTP_301")
+          host        = lookup(redirect.value, "host", "#{host}")
+          path        = lookup(redirect.value, "path", "/#{path}")
+          query       = lookup(redirect.value, "query", "#{query}")
+        }
+      }
     }
   }
 

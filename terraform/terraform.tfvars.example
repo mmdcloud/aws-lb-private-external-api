@@ -9,6 +9,17 @@ private_subnets = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
 aws_bgp_asn     = 64512
 
 # ==============================================================================
+# HTTPS & SSL/TLS Configuration
+# ==============================================================================
+# Optional: supply an existing ACM Certificate ARN. If omitted/null, a self-signed
+# certificate will be automatically generated and imported into ACM:
+# acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+domain_name          = "api.example.internal"
+ssl_policy           = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+enable_http_redirect = true
+
+# ==============================================================================
 # Google Cloud Platform (GCP) Configuration (Private External API)
 # ==============================================================================
 gcp_project_id      = "my-gcp-production-project-id"
@@ -36,4 +47,3 @@ tags = {
 # In addition to the auto-provisioned GCP backend instances, you can register
 # custom private IP addresses (e.g. on-premises or existing hybrid endpoints):
 # custom_external_endpoints = ["10.30.1.10", "10.30.2.10"]
-

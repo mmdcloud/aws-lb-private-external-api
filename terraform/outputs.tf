@@ -12,6 +12,16 @@ output "alb_arn" {
   value       = module.alb.lb_arn
 }
 
+output "alb_https_url" {
+  description = "HTTPS endpoint URL for the Application Load Balancer."
+  value       = "https://${module.alb.lb_dns_name}"
+}
+
+output "alb_certificate_arn" {
+  description = "ARN of the ACM SSL/TLS certificate attached to the HTTPS listener."
+  value       = local.certificate_arn
+}
+
 output "target_group_arn" {
   description = "ARN of the AWS IP Target Group fronting the private external API."
   value       = aws_lb_target_group.ext_api_tg.arn
@@ -56,7 +66,11 @@ output "bgp_status_gcp_command" {
 }
 
 output "test_alb_curl_command" {
-  description = "Command to test live traffic distribution and verify multi-cloud connectivity."
-  value       = "curl -s http://${module.alb.lb_dns_name}"
+  description = "Command to test live HTTPS traffic distribution and verify end-to-end multi-cloud connectivity."
+  value       = "curl -k -s https://${module.alb.lb_dns_name}"
 }
 
+output "test_alb_http_redirect_command" {
+  description = "Command to verify HTTP to HTTPS 301 redirect on port 80."
+  value       = "curl -I http://${module.alb.lb_dns_name}"
+}

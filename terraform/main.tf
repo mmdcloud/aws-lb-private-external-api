@@ -444,7 +444,54 @@ resource "aws_lb_target_group_attachment" "ext_api_attachment" {
 }
 
 # -----------------------------------------------------------------------------
-# AWS: Internet-Facing Application Load Balancer
+# AWS: SSL/TLS Certificate for Application Load Balancer
+# -----------------------------------------------------------------------------
+# Generates a 2048-bit RSA private key and self-signed certificate if no existing
+# ACM certificate ARN is supplied in var.acm_certificate_arn.
+resource "tls_private_key" "alb_cert_key" {
+  count     = var.acm_certificate_arn == null || var.acm_certificate_arn == "" ? 1 : 0
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "alb_cert" {
+  count           = var.acm_certificate_arn == null || var.acm_certificate_arn == "" ? 1 : 0
+  private_key_pem = tls_private_key.alb_cert_key[0].private_key_pem
+
+  subject {
+    common_name  = var.domain_name
+    organization = "Enterprise Multi-Cloud Ingress"
+  }
+
+  validity_period_hours = 8760 # 1 year
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+resource "aws_acm_certificate" "alb_cert" {
+  count            = var.acm_certificate_arn == null || var.acm_certificate_arn == "" ? 1 : 0
+  private_key      = tls_private_key.alb_cert_key[0].private_key_pem
+  certificate_body = tls_self_signed_cert.alb_cert[0].cert_pem
+
+  tags = merge(var.tags, {
+    Name = "${var.environment}-alb-ssl-cert"
+  })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+locals {
+  certificate_arn = var.acm_certificate_arn != null && var.acm_certificate_arn != "" ? var.acm_certificate_arn : aws_acm_certificate.alb_cert[0].arn
+}
+
+# -----------------------------------------------------------------------------
+# AWS: Internet-Facing Application Load Balancer (HTTP & HTTPS Listeners)
 # -----------------------------------------------------------------------------
 module "alb" {
   source                     = "./modules/aws/load-balancer"
@@ -458,9 +505,30 @@ module "alb" {
   target_groups = []
 
   listeners = [
+    # HTTP Port 80 Listener (Redirects HTTP to HTTPS :443)
     {
       listener_port     = 80
       listener_protocol = "HTTP"
+      default_actions = [
+        var.enable_http_redirect ? {
+          type = "redirect"
+          redirect = {
+            port        = "443"
+            protocol    = "HTTPS"
+            status_code = "HTTP_301"
+          }
+        } : {
+          type             = "forward"
+          target_group_arn = aws_lb_target_group.ext_api_tg.arn
+        }
+      ]
+    },
+    # HTTPS Port 443 Listener (Terminates SSL and forwards to GCP private backend)
+    {
+      listener_port     = 443
+      listener_protocol = "HTTPS"
+      ssl_policy        = var.ssl_policy
+      certificate_arn   = local.certificate_arn
       default_actions = [
         {
           type             = "forward"
@@ -472,4 +540,3 @@ module "alb" {
 
   tags = var.tags
 }
-

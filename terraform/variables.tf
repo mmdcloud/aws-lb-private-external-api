@@ -59,6 +59,34 @@ variable "aws_bgp_asn" {
 }
 
 # ==============================================================================
+# HTTPS & SSL/TLS Configuration
+# ==============================================================================
+
+variable "acm_certificate_arn" {
+  type        = string
+  default     = null
+  description = "Optional existing ACM Certificate ARN. If null or empty, a self-signed TLS certificate is generated and imported into ACM."
+}
+
+variable "domain_name" {
+  type        = string
+  default     = "api.example.internal"
+  description = "Domain name / Common Name (CN) for the self-signed SSL/TLS certificate."
+}
+
+variable "ssl_policy" {
+  type        = string
+  default     = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  description = "Security policy for the HTTPS ALB listener (e.g. ELBSecurityPolicy-TLS13-1-2-2021-06)."
+}
+
+variable "enable_http_redirect" {
+  type        = bool
+  default     = true
+  description = "Whether to redirect HTTP (port 80) traffic to HTTPS (port 443)."
+}
+
+# ==============================================================================
 # Google Cloud Platform (GCP) Configuration (Private External API)
 # ==============================================================================
 
@@ -112,4 +140,3 @@ variable "custom_external_endpoints" {
   description = "Optional additional external private IP addresses to register into the ALB Target Group."
   default     = []
 }
-

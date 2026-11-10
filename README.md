@@ -3,14 +3,14 @@
 [![Terraform Version](https://img.shields.io/badge/Terraform-%3E%3D1.5.0-623CE4.svg?logo=terraform&logoColor=white)](https://www.terraform.io)
 [![AWS Provider](https://img.shields.io/badge/AWS%20Provider-~%3E6.0-FF9900.svg?logo=amazon-aws&logoColor=white)](https://registry.terraform.io/providers/hashicorp/aws/latest)
 [![GCP Provider](https://img.shields.io/badge/GCP%20Provider-~%3E8.0-4285F4.svg?logo=google-cloud&logoColor=white)](https://registry.terraform.io/providers/hashicorp/google/latest)
-[![SLA](https://img.shields.io/badge/Availability-99.99%25%20HA%20SLA-00C853.svg)](#high-availability--sla-architecture)
+[![High Availability](https://img.shields.io/badge/High%20Availability-Active--Active%20Tunnels-00C853.svg)](#high-availability-architecture)
 [![Routing](https://img.shields.io/badge/Routing-Dynamic%20BGP%20%284--Tunnel%29-009688.svg)](#network-topology--bgp-addressing-matrix)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 An enterprise-grade, automated Terraform configuration establishing an end-to-end multi-cloud ingress architecture:
 - **Edge Ingress**: Amazon Web Services (AWS) **Internet-Facing Application Load Balancer (ALB)** distributed across Availability Zones.
 - **Hybrid Core**: AWS **IP-type Target Group** (`target_type = "ip"`, `availability_zone = "all"`) routing traffic seamlessly to private IP addresses outside the AWS VPC.
-- **Resilient Transport**: AWS **Virtual Private Gateway (VGW)** coupled with GCP **Cloud HA VPN** via **4 active IPsec IKEv2 tunnels** and dynamic **BGP routing** (conforming to the 99.99% availability SLA).
+- **Resilient Transport**: AWS **Virtual Private Gateway (VGW)** coupled with GCP **Cloud HA VPN** via **4 active IPsec IKEv2 tunnels** and dynamic **BGP routing** (with multi-tunnel automatic failover).
 - **Private External API Backend**: Multi-zone **Ubuntu 24.04 LTS Nginx** API web nodes in Google Cloud Platform (GCP) private subnets with **zero public IP addresses**, enabled with Cloud NAT for secure package updates and Google Cloud Identity-Aware Proxy (IAP) for bastionless administration.
 
 ---
@@ -21,7 +21,7 @@ An enterprise-grade, automated Terraform configuration establishing an end-to-en
 - [Visual Proof of Deployment](#visual-proof-of-deployment)
 - [Traffic Flow & Packet Lifecycle](#traffic-flow--packet-lifecycle)
 - [Network Topology & BGP Addressing Matrix](#network-topology--bgp-addressing-matrix)
-- [High Availability & SLA Architecture](#high-availability--sla-architecture)
+- [High Availability Architecture](#high-availability-architecture)
 - [Security & Zero-Trust Posture](#security--zero-trust-posture)
 - [Repository Structure](#repository-structure)
 - [Prerequisites & IAM Permissions](#prerequisites--iam-permissions)
@@ -237,9 +237,9 @@ Inside IP CIDRs are non-overlapping `/30` subnets allocated within `169.254.0.0/
 
 ---
 
-## High Availability & SLA Architecture
+## High Availability Architecture
 
-Google Cloud HA VPN coupled with AWS Virtual Private Gateway provides a **99.99% service availability SLA** when configured with 4 active tunnels terminating on redundant peer gateway endpoints:
+Google Cloud HA VPN coupled with AWS Virtual Private Gateway provides a production-grade, highly available interconnect topology when configured with 4 active tunnels terminating on redundant peer gateway endpoints:
 
 ```
                   +-----------------------------+
