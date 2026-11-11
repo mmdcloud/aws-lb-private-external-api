@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 An enterprise-grade, automated Terraform configuration establishing an end-to-end multi-cloud ingress architecture:
-- **Edge Ingress**: Amazon Web Services (AWS) **Internet-Facing Application Load Balancer (ALB)** distributed across Availability Zones.
+- **Edge Ingress**: Amazon Web Services (AWS) **Internet-Facing Application Load Balancer (ALB)** distributed across Availability Zones terminating **HTTPS (TLS 1.3 / 1.2)** with automated ACM SSL/TLS certificate provisioning and automatic **HTTP to HTTPS (301) redirection**.
 - **Hybrid Core**: AWS **IP-type Target Group** (`target_type = "ip"`, `availability_zone = "all"`) routing traffic seamlessly to private IP addresses outside the AWS VPC.
 - **Resilient Transport**: AWS **Virtual Private Gateway (VGW)** coupled with GCP **Cloud HA VPN** via **4 active IPsec IKEv2 tunnels** and dynamic **BGP routing** (with multi-tunnel automatic failover).
 - **Private External API Backend**: Multi-zone **Ubuntu 24.04 LTS Nginx** API web nodes in Google Cloud Platform (GCP) private subnets with **zero public IP addresses**, enabled with Cloud NAT for secure package updates and Google Cloud Identity-Aware Proxy (IAP) for bastionless administration.
@@ -42,7 +42,7 @@ flowchart TD
     Client(["Public Internet Client"])
 
     subgraph AWS["Amazon Web Services (us-east-1)"]
-        ALB["Internet-Facing Application Load Balancer<br/>HTTP (:80) / HTTPS (:443)"]
+        ALB["Internet-Facing Application Load Balancer<br/>HTTP (:80 Redirect) & HTTPS (:443 TLS)"]
         
         subgraph AWS_TG["Hybrid Target Group (target_type = 'ip')"]
             TG["Target Group: ext-api-tg<br/>Targets (AZ='all'):<br/>10.20.1.10:80, 10.20.2.10:80, 10.20.3.10:80"]
@@ -194,9 +194,11 @@ Live web browser request hitting the public AWS ALB DNS endpoint (`http://prod-p
 ## Traffic Flow & Packet Lifecycle
 
 ### 1. Ingress Journey (Client to GCP Private Backend)
-1. **Public Client Request**: A user sends an HTTP request to the AWS Application Load Balancer DNS name (e.g., `prod-public-alb-1809782473.us-east-1.elb.amazonaws.com`).
-2. **ALB Termination & Connection Pooling**: The ALB terminates the TCP/HTTP connection on port 80. The listener executes a forward action pointing to the IP Target Group (`ext-api-tg`).
-3. **Hybrid Target Group Routing**: The target group routes the request to one of the registered external private IPs (`10.20.1.10`, `10.20.2.10`, `10.20.3.10`). Because the target type is `ip` and the address is outside the AWS VPC, AWS requires `availability_zone = "all"`.
+1. **Public Client Request**: A user connects via HTTP (`:80`) or HTTPS (`:443`) to the AWS ALB DNS name (e.g., `prod-public-alb-1809782473.us-east-1.elb.amazonaws.com`).
+2. **HTTP Redirection & TLS Termination**:
+   - Inbound HTTP on port 80 triggers an automated `HTTP_301` redirect to HTTPS on port 443.
+   - Inbound HTTPS on port 443 terminates TLS at the ALB using the AWS Certificate Manager (ACM) SSL certificate and policy `ELBSecurityPolicy-TLS13-1-2-2021-06`.
+3. **Hybrid Target Group Routing**: The HTTPS listener executes a forward action pointing to the IP Target Group (`ext-api-tg`). The target group routes the request to one of the registered external private IPs (`10.20.1.10`, `10.20.2.10`, `10.20.3.10`). Because the target type is `ip` and the address is outside the AWS VPC, AWS requires `availability_zone = "all"`.
 4. **VPC Route Lookup**: The ALB node initiates a new TCP connection from its private IP in the AWS public subnet (`10.0.1.0/24`, `10.0.2.0/24`, or `10.0.3.0/24`). The VPC route table matches the BGP-propagated prefix `10.20.0.0/16` pointing to the Virtual Private Gateway (`vgw-*`).
 5. **IPsec Encapsulation & ECMP**: AWS VGW encapsulates the packet into IPsec ESP and distributes the traffic across the 4 active IPsec tunnels using BGP Equal-Cost Multi-Path (ECMP).
 6. **Decapsulation at GCP HA VPN**: The GCP Cloud HA VPN Gateway decapsulates the packet and places it onto the GCP VPC routing fabric.
@@ -273,6 +275,7 @@ Google Cloud HA VPN coupled with AWS Virtual Private Gateway provides a producti
 ## Security & Zero-Trust Posture
 
 - **Zero Public IP Exposure on Backend Workloads**: GCP Compute Engine instances reside strictly in private subnets with no `access_config` block (strictly no public IP). They cannot be accessed directly from the public internet.
+- **End-to-End SSL/TLS Ingress**: The ALB listener enforces HTTPS encryption using TLS 1.3 / 1.2 (`ELBSecurityPolicy-TLS13-1-2-2021-06`). An SSL/TLS certificate (RSA 2048-bit) is generated and imported into AWS Certificate Manager (ACM) automatically, with support for existing ACM certificate ARNs. All plain HTTP (port 80) traffic is automatically redirected to HTTPS via status `HTTP_301`.
 - **Outbound Package Management via Cloud NAT**: GCP instances download OS packages (`apt-get install -y nginx`) and security patches through Google Cloud NAT, preventing direct inbound ingress.
 - **Bastionless Administration via IAP**: Port 22 is restricted exclusively to Google Cloud Identity-Aware Proxy (`35.235.240.0/20`), enabling encrypted, audited SSH sessions without bastion hosts or open internet ports.
 - **Strict Ingress Filtering**:
@@ -456,17 +459,22 @@ aws elbv2 describe-target-health --target-group-arn "$TG_ARN" --query 'TargetHea
 ```
 
 ### 4. Live Traffic Validation
-Execute the automated test target or query the ALB DNS endpoint:
+Execute the automated test target (which tests both HTTP 301 redirection and HTTPS traffic):
 ```bash
 make test
 ```
-Or run a multi-request curl loop to observe multi-zone load balancing:
+
+Or query the endpoints manually:
 ```bash
 ALB_DNS=$(terraform -chdir=terraform output -raw alb_dns_name)
-echo "Querying AWS ALB endpoint: http://${ALB_DNS}"
 
+# 1. Verify HTTP -> HTTPS 301 Redirect on Port 80
+curl -I -s "http://${ALB_DNS}" | head -n 5
+
+# 2. Query HTTPS on Port 443 over the multi-cloud VPN
+echo "Testing AWS ALB HTTPS Endpoint: https://${ALB_DNS}"
 for i in {1..6}; do
-  curl -s "http://${ALB_DNS}" | grep -E "(Instance Name|GCP Zone|Private IP|Origin Cloud)"
+  curl -k -s "https://${ALB_DNS}" | grep -E "(Instance Name|GCP Zone|Private IP|Origin Cloud)"
   sleep 1
 done
 ```
@@ -514,6 +522,10 @@ Live browser confirmation:
 | `public_subnets` | CIDR blocks for AWS public subnets (housing the ALB) | `list(string)` | `["10.0.1.0/24", ...]` | no |
 | `private_subnets` | CIDR blocks for AWS private subnets | `list(string)` | `["10.0.4.0/24", ...]` | no |
 | `aws_bgp_asn` | BGP ASN for AWS Virtual Private Gateway | `number` | `64512` | no |
+| `acm_certificate_arn` | Existing ACM certificate ARN (auto-generated if omitted) | `string` | `null` | no |
+| `domain_name` | Common Name (CN) for self-signed certificate | `string` | `"api.example.internal"` | no |
+| `ssl_policy` | TLS security policy for HTTPS listener | `string` | `"ELBSecurityPolicy-TLS13-1-2-2021-06"` | no |
+| `enable_http_redirect` | Force 301 redirection from HTTP (80) to HTTPS (443) | `bool` | `true` | no |
 | `gcp_project_id` | Target Google Cloud Project ID | `string` | n/a | **yes** |
 | `gcp_region` | GCP deployment region for HA VPN & Cloud Router | `string` | `"us-central1"` | no |
 | `gcp_zones` | GCP Availability Zones for backend subnets | `list(string)` | `["us-central1-a", ...]` | no |
@@ -531,6 +543,8 @@ Live browser confirmation:
 | :--- | :--- | :---: |
 | `alb_dns_name` | Public DNS name of the AWS Application Load Balancer | no |
 | `alb_arn` | ARN of the AWS Application Load Balancer | no |
+| `alb_https_url` | Full HTTPS URL of the Application Load Balancer | no |
+| `alb_certificate_arn` | ARN of the active ACM SSL/TLS certificate | no |
 | `target_group_arn` | ARN of the AWS IP Target Group fronting the private external API | no |
 | `target_group_name` | Name of the AWS IP Target Group | no |
 | `registered_external_endpoints` | List of target private IP endpoints registered in the ALB Target Group | no |
@@ -539,7 +553,8 @@ Live browser confirmation:
 | `aws_vpn_connection_ids` | IDs of the AWS Site-to-Site VPN connections | no |
 | `bgp_status_aws_command` | AWS CLI command to verify VPN tunnel status and BGP telemetry | no |
 | `bgp_status_gcp_command` | gcloud CLI command to verify GCP Cloud Router BGP state | no |
-| `test_alb_curl_command` | Command to test live traffic distribution against the ALB endpoint | no |
+| `test_alb_curl_command` | Command to test live HTTPS traffic distribution against the ALB endpoint | no |
+| `test_alb_http_redirect_command` | Command to test HTTP to HTTPS 301 redirection on port 80 | no |
 
 ---
 

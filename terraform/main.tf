@@ -511,15 +511,17 @@ module "alb" {
       listener_protocol = "HTTP"
       default_actions = [
         var.enable_http_redirect ? {
-          type = "redirect"
+          type             = "redirect"
+          target_group_arn = null
           redirect = {
             port        = "443"
             protocol    = "HTTPS"
             status_code = "HTTP_301"
           }
-        } : {
+          } : {
           type             = "forward"
           target_group_arn = aws_lb_target_group.ext_api_tg.arn
+          redirect         = null
         }
       ]
     },
@@ -533,6 +535,7 @@ module "alb" {
         {
           type             = "forward"
           target_group_arn = aws_lb_target_group.ext_api_tg.arn
+          redirect         = null
         }
       ]
     }

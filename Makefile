@@ -10,7 +10,7 @@ help:
 	@echo "  make plan      - Generate and display execution plan"
 	@echo "  make apply     - Provision infrastructure"
 	@echo "  make destroy   - Tear down all managed infrastructure"
-	@echo "  make test      - Test end-to-end traffic against AWS ALB endpoint"
+	@echo "  make test      - Test end-to-end HTTPS traffic and HTTP redirect against AWS ALB"
 
 init:
 	terraform -chdir=$(TF_DIR) init
@@ -36,6 +36,8 @@ test:
 		echo "Error: Could not retrieve alb_dns_name output. Has 'make apply' completed?"; \
 		exit 1; \
 	fi; \
-	echo "Querying AWS Application Load Balancer endpoint: http://$$ALB_DNS"; \
-	curl -s "http://$$ALB_DNS"
-
+	echo "1. Testing HTTP to HTTPS 301 Redirect on port 80:"; \
+	curl -I -s "http://$$ALB_DNS" | head -n 5; \
+	echo ""; \
+	echo "2. Querying AWS Application Load Balancer HTTPS endpoint: https://$$ALB_DNS"; \
+	curl -k -s "https://$$ALB_DNS"
