@@ -218,32 +218,6 @@ module "nat" {
   log_config_filter = "ERRORS_ONLY"
 }
 
-# resource "google_compute_router" "router" {
-#   name    = "${var.environment}-cr-ha-vpn"
-#   region  = var.gcp_region
-#   network = module.gcp_vpc.vpc_name
-
-#   bgp {
-#     asn               = var.gcp_bgp_asn
-#     advertise_mode    = "CUSTOM"
-#     advertised_groups = ["ALL_SUBNETS"]
-#   }
-# }
-
-# # Cloud NAT enables backend instances to fetch updates without allocating public IPs
-# resource "google_compute_router_nat" "nat" {
-#   name                               = "${var.environment}-gcp-cloud-nat"
-#   router                             = google_compute_router.router.name
-#   region                             = var.gcp_region
-#   nat_ip_allocate_option             = "AUTO_ONLY"
-#   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
-
-#   log_config {
-#     enable = true
-#     filter = "ERRORS_ONLY"
-#   }
-# }
-
 resource "google_compute_ha_vpn_gateway" "ha_gateway" {
   name    = "${var.environment}-gcp-ha-vpn-gw"
   region  = var.gcp_region
@@ -322,22 +296,83 @@ locals {
   all_target_ips = concat(local.gcp_private_ips, var.custom_external_endpoints)
 }
 
-resource "google_compute_instance" "backend_api" {
-  count        = length(var.gcp_private_subnets)
-  name         = "${var.environment}-gcp-api-${count.index + 1}"
-  machine_type = var.gcp_machine_type
-  zone         = var.gcp_zones[count.index]
+# resource "google_compute_instance" "backend_api" {
+#   count        = length(var.gcp_private_subnets)
+#   name         = "${var.environment}-gcp-api-${count.index + 1}"
+#   machine_type = var.gcp_machine_type
+#   zone         = var.gcp_zones[count.index]
 
-  boot_disk {
-    initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+#   boot_disk {
+#     initialize_params {
+#       image = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+#     }
+#   }
+
+#   network_interface {
+#     subnetwork = "${var.environment}-api-subnet-${count.index + 1}"
+#     network_ip = local.gcp_private_ips[count.index]
+#     # NOTE: NO access_config block -> strictly private, zero public IP!
+#   }
+
+#   metadata_startup_script = <<-EOF
+#     #!/bin/bash
+#     set -xe
+#     export DEBIAN_FRONTEND=noninteractive
+#     apt-get update -y
+#     apt-get install -y nginx curl
+
+#     VM_NAME=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/name" || hostname)
+#     VM_ZONE=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{print $NF}' || echo "unknown")
+#     INTERNAL_IP=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip" || hostname -I | awk '{print $1}')
+
+#     cat > /var/www/html/index.html <<HTML
+#     <!DOCTYPE html>
+#     <html>
+#     <head><title>GCP Private External API</title></head>
+#     <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
+#       <h2>Hello from GCP Private External API Service</h2>
+#       <p><b>Instance Name:</b> $VM_NAME</p>
+#       <p><b>GCP Zone:</b> $VM_ZONE</p>
+#       <p><b>Private IP:</b> $INTERNAL_IP</p>
+#       <p><b>Cloud Provider:</b> Google Cloud Platform (GCP)</p>
+#       <p><b>Fronted By:</b> AWS Application Load Balancer (ALB) via Site-to-Site VPN</p>
+#       <p><b>Status:</b> Healthy</p>
+#     </body>
+#     </html>
+#     HTML
+
+#     systemctl enable --now nginx
+#   EOF
+
+#   tags = ["private-api", "vpn-target"]
+
+#   depends_on = [
+#     module.gcp_vpc,
+#     module.nat
+#   ]
+# }
+
+module "backend_api" {
+  source                    = "./modules/gcp/compute"
+  count                     = length(var.gcp_private_subnets)
+  name                      = "${var.environment}-gcp-api-${count.index + 1}"
+  machine_type              = var.gcp_machine_type
+  zone                      = var.gcp_zones[count.index]
+  deletion_protection       = false
+  allow_stopping_for_update = false
+
+  boot_disk = {
+    auto_delete = true
+    device_name = "boot-disk"
+    mode        = "READ_WRITE"
+    image       = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+    size        = 10
+    type        = "pd-ssd"
+    labels = {
+      environment = "production"
+      team        = "platform-eng"
+      cost_center = "cc-1042"
     }
-  }
-
-  network_interface {
-    subnetwork = "${var.environment}-api-subnet-${count.index + 1}"
-    network_ip = local.gcp_private_ips[count.index]
-    # NOTE: NO access_config block -> strictly private, zero public IP!
   }
 
   metadata_startup_script = <<-EOF
@@ -370,12 +405,15 @@ resource "google_compute_instance" "backend_api" {
     systemctl enable --now nginx
   EOF
 
-  tags = ["private-api", "vpn-target"]
-
-  depends_on = [
-    module.gcp_vpc,
-    module.nat
+  network_interfaces = [
+    {
+      network    = module.gcp_vpc.vpc_names
+      subnetwork = "${var.environment}-api-subnet-${count.index + 1}"
+      network_ip = local.gcp_private_ips[count.index]
+    }
   ]
+
+  tags = ["private-api", "vpn-target"]
 }
 
 # -----------------------------------------------------------------------------
@@ -467,7 +505,7 @@ resource "aws_lb_target_group_attachment" "ext_api_attachment" {
 
   depends_on = [
     google_compute_router_peer.bgp_peer,
-    google_compute_instance.backend_api
+    module.backend_api
   ]
 }
 

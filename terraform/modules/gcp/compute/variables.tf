@@ -169,6 +169,7 @@ variable "network_interfaces" {
   type = list(object({
     network    = optional(string, null)
     subnetwork = optional(string, null)
+    network_ip = optional(string, null)
     access_configs = optional(list(object({
       nat_ip = optional(string, null)
     })), [])
