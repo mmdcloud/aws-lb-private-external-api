@@ -45,8 +45,8 @@ module "aws_vpc" {
   enable_dns_support      = true
   create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway      = true
-  single_nat_gateway      = true
+  enable_nat_gateway      = false
+  single_nat_gateway      = false
   one_nat_gateway_per_az  = false
   tags                    = var.tags
 }
@@ -190,31 +190,59 @@ module "gcp_vpc" {
   ]
 }
 
-resource "google_compute_router" "router" {
-  name    = "${var.environment}-cr-ha-vpn"
-  region  = var.gcp_region
-  network = module.gcp_vpc.vpc_name
+module "nat" {
+  source = "./modules/gcp/cloud-nat"
 
-  bgp {
-    asn               = var.gcp_bgp_asn
-    advertise_mode    = "CUSTOM"
-    advertised_groups = ["ALL_SUBNETS"]
-  }
-}
+  project_id             = var.gcp_project_id
+  region                 = var.gcp_region
+  nat_ip_allocate_option = "AUTO_ONLY"
+  create_router          = true
+  router                 = "${var.environment}-cr-ha-vpn"
+  network                = module.gcp_vpc.vpc_name
+  type                   = "PUBLIC"
+  name                   = "${var.environment}-gcp-cloud-nat"
 
-# Cloud NAT enables backend instances to fetch updates without allocating public IPs
-resource "google_compute_router_nat" "nat" {
-  name                               = "${var.environment}-gcp-cloud-nat"
-  router                             = google_compute_router.router.name
-  region                             = var.gcp_region
-  nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
 
-  log_config {
-    enable = true
-    filter = "ERRORS_ONLY"
-  }
+  router_asn = var.gcp_bgp_asn
+
+  subnetworks = [
+    {
+      name                     = module.gcp_vpc.subnets_by_name["${var.environment}-api-subnet-0"].self_link
+      source_ip_ranges_to_nat  = ["ALL_IP_RANGES"]
+      secondary_ip_range_names = []
+    }
+  ]
+
+  log_config_enable = true
+  log_config_filter = "ERRORS_ONLY"
 }
+
+# resource "google_compute_router" "router" {
+#   name    = "${var.environment}-cr-ha-vpn"
+#   region  = var.gcp_region
+#   network = module.gcp_vpc.vpc_name
+
+#   bgp {
+#     asn               = var.gcp_bgp_asn
+#     advertise_mode    = "CUSTOM"
+#     advertised_groups = ["ALL_SUBNETS"]
+#   }
+# }
+
+# # Cloud NAT enables backend instances to fetch updates without allocating public IPs
+# resource "google_compute_router_nat" "nat" {
+#   name                               = "${var.environment}-gcp-cloud-nat"
+#   router                             = google_compute_router.router.name
+#   region                             = var.gcp_region
+#   nat_ip_allocate_option             = "AUTO_ONLY"
+#   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+
+#   log_config {
+#     enable = true
+#     filter = "ERRORS_ONLY"
+#   }
+# }
 
 resource "google_compute_ha_vpn_gateway" "ha_gateway" {
   name    = "${var.environment}-gcp-ha-vpn-gw"
@@ -257,7 +285,7 @@ resource "google_compute_vpn_tunnel" "tunnel" {
   peer_external_gateway           = google_compute_external_vpn_gateway.external_gw.id
   peer_external_gateway_interface = each.value.peer_interface
   shared_secret                   = local.psk[each.key]
-  router                          = google_compute_router.router.id
+  router                          = module.nat.router_id
   ike_version                     = 2
 }
 
@@ -265,7 +293,7 @@ resource "google_compute_router_interface" "interface" {
   for_each = local.vpn_tunnels
 
   name       = "${var.environment}-cr-if-${each.key}"
-  router     = google_compute_router.router.name
+  router     = module.nat.router_name
   region     = var.gcp_region
   ip_range   = "${local.aws_vpn_connections[each.value.conn]["tunnel${each.value.aws_tunnel}_cgw_inside_address"]}/30"
   vpn_tunnel = google_compute_vpn_tunnel.tunnel[each.key].name
@@ -275,7 +303,7 @@ resource "google_compute_router_peer" "bgp_peer" {
   for_each = local.vpn_tunnels
 
   name                      = "${var.environment}-bgp-peer-${each.key}"
-  router                    = google_compute_router.router.name
+  router                    = module.nat.router_name
   region                    = var.gcp_region
   peer_ip_address           = local.aws_vpn_connections[each.value.conn]["tunnel${each.value.aws_tunnel}_vgw_inside_address"]
   peer_asn                  = aws_vpn_gateway.vpn_gw.amazon_side_asn
@@ -346,7 +374,7 @@ resource "google_compute_instance" "backend_api" {
 
   depends_on = [
     module.gcp_vpc,
-    google_compute_router_nat.nat
+    module.nat
   ]
 }
 
