@@ -1,8 +1,3 @@
-# =============================================================================
-# AWS Application Load Balancer -> AWS Site-to-Site VPN -> GCP HA VPN ->
-# GCP Private External API Compute Instances (IP Target Group)
-# =============================================================================
-
 # -----------------------------------------------------------------------------
 # Tunnel topology & Cryptographic PSK Generation
 # -----------------------------------------------------------------------------
@@ -206,14 +201,6 @@ module "nat" {
 
   router_asn = var.gcp_bgp_asn
 
-  subnetworks = [
-    {
-      name                     = module.gcp_vpc.subnets_by_name["${var.environment}-api-subnet-0"].self_link
-      source_ip_ranges_to_nat  = ["ALL_IP_RANGES"]
-      secondary_ip_range_names = []
-    }
-  ]
-
   log_config_enable = true
   log_config_filter = "ERRORS_ONLY"
 }
@@ -296,62 +283,6 @@ locals {
   all_target_ips = concat(local.gcp_private_ips, var.custom_external_endpoints)
 }
 
-# resource "google_compute_instance" "backend_api" {
-#   count        = length(var.gcp_private_subnets)
-#   name         = "${var.environment}-gcp-api-${count.index + 1}"
-#   machine_type = var.gcp_machine_type
-#   zone         = var.gcp_zones[count.index]
-
-#   boot_disk {
-#     initialize_params {
-#       image = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
-#     }
-#   }
-
-#   network_interface {
-#     subnetwork = "${var.environment}-api-subnet-${count.index + 1}"
-#     network_ip = local.gcp_private_ips[count.index]
-#     # NOTE: NO access_config block -> strictly private, zero public IP!
-#   }
-
-#   metadata_startup_script = <<-EOF
-#     #!/bin/bash
-#     set -xe
-#     export DEBIAN_FRONTEND=noninteractive
-#     apt-get update -y
-#     apt-get install -y nginx curl
-
-#     VM_NAME=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/name" || hostname)
-#     VM_ZONE=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{print $NF}' || echo "unknown")
-#     INTERNAL_IP=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip" || hostname -I | awk '{print $1}')
-
-#     cat > /var/www/html/index.html <<HTML
-#     <!DOCTYPE html>
-#     <html>
-#     <head><title>GCP Private External API</title></head>
-#     <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
-#       <h2>Hello from GCP Private External API Service</h2>
-#       <p><b>Instance Name:</b> $VM_NAME</p>
-#       <p><b>GCP Zone:</b> $VM_ZONE</p>
-#       <p><b>Private IP:</b> $INTERNAL_IP</p>
-#       <p><b>Cloud Provider:</b> Google Cloud Platform (GCP)</p>
-#       <p><b>Fronted By:</b> AWS Application Load Balancer (ALB) via Site-to-Site VPN</p>
-#       <p><b>Status:</b> Healthy</p>
-#     </body>
-#     </html>
-#     HTML
-
-#     systemctl enable --now nginx
-#   EOF
-
-#   tags = ["private-api", "vpn-target"]
-
-#   depends_on = [
-#     module.gcp_vpc,
-#     module.nat
-#   ]
-# }
-
 module "backend_api" {
   source                    = "./modules/gcp/compute"
   count                     = length(var.gcp_private_subnets)
@@ -407,7 +338,7 @@ module "backend_api" {
 
   network_interfaces = [
     {
-      network    = module.gcp_vpc.vpc_names
+      network    = module.gcp_vpc.vpc_name
       subnetwork = "${var.environment}-api-subnet-${count.index + 1}"
       network_ip = local.gcp_private_ips[count.index]
     }
@@ -493,15 +424,13 @@ resource "aws_lb_target_group" "ext_api_tg" {
   })
 }
 
-# Attach external private IP endpoints to Target Group.
-# IMPORTANT: For targets outside the VPC (e.g. over VPN / Direct Connect),
-# AWS requires availability_zone = "all".
+# Attach external private IP endpoints to Target Group
 resource "aws_lb_target_group_attachment" "ext_api_attachment" {
   count             = length(local.all_target_ips)
   target_group_arn  = aws_lb_target_group.ext_api_tg.arn
   target_id         = local.all_target_ips[count.index]
   port              = 80
-  availability_zone = "all"
+  availability_zone = "all" # For targets outside the VPC (e.g. over VPN / Direct Connect) AWS requires availability_zone = "all".
 
   depends_on = [
     google_compute_router_peer.bgp_peer,
@@ -512,8 +441,6 @@ resource "aws_lb_target_group_attachment" "ext_api_attachment" {
 # -----------------------------------------------------------------------------
 # AWS: SSL/TLS Certificate for Application Load Balancer
 # -----------------------------------------------------------------------------
-# Generates a 2048-bit RSA private key and self-signed certificate if no existing
-# ACM certificate ARN is supplied in var.acm_certificate_arn.
 resource "tls_private_key" "alb_cert_key" {
   count     = var.acm_certificate_arn == null || var.acm_certificate_arn == "" ? 1 : 0
   algorithm = "RSA"

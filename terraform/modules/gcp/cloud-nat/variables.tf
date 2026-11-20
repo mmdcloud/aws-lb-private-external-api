@@ -171,11 +171,11 @@ variable "rules" {
   default = []
 }
 
-variable "router_advertise_mode"{
-  type = string
+variable "router_advertise_mode" {
+  type    = string
   default = null
 }
-variable "router_advertised_groups"{
-  type = list(string)
-  default = [  ]
+variable "router_advertised_groups" {
+  type    = list(string)
+  default = []
 }
